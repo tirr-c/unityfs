@@ -1,0 +1,13 @@
+[package]
+name = "unityfs"
+version = "0.1.0"
+authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+lazy_static = "1.4.0"
+
+[dependencies.nom]
+version = "5.0.0"
+default-features = false
+features = ["std"]
