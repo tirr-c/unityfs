@@ -20,8 +20,8 @@ use type_tree::TypeMetadata;
 pub use type_tree::Data;
 
 #[derive(Debug)]
-pub struct Asset<'m, 'b> {
-    name: Cow<'m, str>,
+pub struct Asset<'b> {
+    name: String,
     metadata_size: u32,
     file_size: u32,
     format: u32,
@@ -49,8 +49,8 @@ pub struct AssetRef<'b> {
     file_path: Cow<'b, str>,
 }
 
-impl<'m, 'b> Asset<'m, 'b> {
-    pub(crate) fn parse(name: Cow<'m, str>, input: &'b [u8], offset: u64) -> IResult<&'b [u8], Self> {
+impl<'b> Asset<'b> {
+    pub(crate) fn parse(name: String, input: &'b [u8], offset: u64) -> IResult<&[u8], Self> {
         let base = input;
         let (input, metadata_size) = nom_number::be_u32(input)?;
         let (input, file_size) = nom_number::be_u32(input)?;
@@ -188,7 +188,7 @@ impl<'m, 'b> Asset<'m, 'b> {
     }
 }
 
-impl<'m, 'b> Asset<'m, 'b> {
+impl<'b> Asset<'b> {
     pub fn name(&self) -> &str {
         &self.name
     }

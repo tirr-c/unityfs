@@ -1,5 +1,4 @@
 use crate::common_parser::read_string;
-use std::borrow::Cow;
 use nom::{
     self,
     bytes::complete as nom_bytes,
@@ -15,23 +14,25 @@ pub struct ArchiveBlockInfo {
 }
 
 #[derive(Debug)]
-pub struct NodeInfo<'a> {
+pub struct NodeInfo {
     pub(crate) offset: u64,
     pub(crate) size: u64,
     pub(crate) status: u32,
-    pub(crate) name: Cow<'a, str>,
+    pub(crate) name: String,
 }
 
 #[derive(Debug)]
-pub struct Metadata<'a> {
-    pub(crate) guid: &'a [u8],
+pub struct Metadata {
+    pub(crate) guid: [u8; 16],
     pub(crate) blocks: Vec<ArchiveBlockInfo>,
-    pub(crate) nodes: Vec<NodeInfo<'a>>,
+    pub(crate) nodes: Vec<NodeInfo>,
 }
 
-impl<'a> Metadata<'a> {
-    pub fn parse(input: &'a [u8]) -> IResult<&[u8], Self> {
-        let (input, guid) = nom_bytes::take(16usize)(input)?;
+impl Metadata {
+    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
+        let (input, guid_slice) = nom_bytes::take(16usize)(input)?;
+        let mut guid = [0; 16];
+        guid.copy_from_slice(guid_slice);
         let (input, block_count) = nom_number::be_u32(input)?;
         let (input, blocks) = nom::multi::count(|input| {
             let (input, u_size) = nom_number::be_u32(input)?;
@@ -54,7 +55,7 @@ impl<'a> Metadata<'a> {
                 offset,
                 size,
                 status,
-                name,
+                name: name.into_owned(),
             };
             Ok((input, ret))
         }, node_count as usize)(input)?;
