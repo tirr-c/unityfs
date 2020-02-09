@@ -143,7 +143,7 @@ impl<'a> TypeTree<'a> {
             let (input, fst) = self.children[0].read(input, endianness, offset)?;
             let offset = offset + (input.as_ptr() as usize - base.as_ptr() as usize) as u64;
             let (input, snd) = self.children[1].read(input, endianness, offset)?;
-            (input, Data::Pair { first: Box::new(fst), second: Box::new(snd) })
+            (input, Data::Pair(Box::new(fst), Box::new(snd)))
         } else if let Some(child) = self.children.get(0).filter(|child| child.is_array) {
             child.read(input, endianness, offset)?
         } else if self.is_array {
@@ -206,7 +206,7 @@ impl<'a> TypeTree<'a> {
 }
 
 #[derive(Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "data")]
 pub enum Data<'b> {
     GenericPrimitive {
         type_name: Cow<'b, str>,
@@ -230,10 +230,7 @@ pub enum Data<'b> {
     Double(f64),
     String(&'b [u8]),
     UInt8Array(&'b [u8]),
-    Pair {
-        first: Box<Data<'b>>,
-        second: Box<Data<'b>>,
-    },
+    Pair(Box<Data<'b>>, Box<Data<'b>>),
 }
 
 impl std::fmt::Debug for Data<'_> {
@@ -275,8 +272,8 @@ impl std::fmt::Debug for Data<'_> {
                 let len = b.len();
                 write!(fmt, "Uint8Array({} byte{})", len, if len == 1 { "" } else { "s" })
             },
-            Data::Pair { first, second } => {
-                fmt.debug_tuple("Pair").field(first).field(second).finish()
+            Data::Pair(fst, snd) => {
+                fmt.debug_tuple("Pair").field(fst).field(snd).finish()
             },
         }
     }
