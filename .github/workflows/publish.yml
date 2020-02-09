@@ -1,0 +1,19 @@
+name: Publish master
+on:
+  push:
+    branches:
+      - master
+jobs:
+  publish-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: wasm-pack build
+        run: wasm-pack build --release --scope tirr-c crates/wasm-unityfs
+      - name: Publish
+        run: |
+          echo '//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}' > ~/.npmrc
+          cd crates/wasm-unityfs/pkg
+          npm publish --access public

@@ -1,8 +1,14 @@
 [package]
 name = "unityfs"
 version = "0.1.0"
+description = "UnityFS parser"
 authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
+repository = "https://github.com/tirr-c/unityfs.git"
+license = "MIT"
 edition = "2018"
+
+[workspace]
+members = ["crates/wasm-unityfs"]
 
 [dependencies]
 lazy_static = "1.4.0"
