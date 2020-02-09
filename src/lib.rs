@@ -11,7 +11,7 @@ use nom::{
     IResult,
 };
 
-pub use asset::Asset;
+pub use asset::{Asset, Object, Data};
 pub use compression::CompressedBlock;
 pub use metadata::Metadata;
 
