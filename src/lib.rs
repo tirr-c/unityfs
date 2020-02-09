@@ -86,7 +86,7 @@ impl<'a> UnityFsMeta<'a> {
         }))
     }
 
-    pub fn read_unityfs(&self) -> UnityFs<'_> {
+    pub fn read_unityfs(&'a self) -> UnityFs<'a> {
         let assets = self.metadata.nodes.iter().map(|node| {
             let block = self.storage.read_range(node.offset..(node.offset + node.size));
             Asset::parse(node.name.clone(), block, node.offset).map(|(_, asset)| asset)
@@ -99,17 +99,17 @@ impl<'a> UnityFsMeta<'a> {
 }
 
 #[derive(Debug)]
-pub struct UnityFs<'b> {
+pub struct UnityFs<'a> {
     guid: [u8; 16],
-    assets: Vec<Asset<'b>>,
+    assets: Vec<Asset<'a>>,
 }
 
-impl<'b> UnityFs<'b> {
+impl<'a> UnityFs<'a> {
     pub fn guid(&self) -> [u8; 16] {
         self.guid
     }
 
-    pub fn assets(&self) -> &[Asset<'b>] {
+    pub fn assets(&self) -> &[Asset<'a>] {
         &self.assets
     }
 }
