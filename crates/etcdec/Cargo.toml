@@ -1,0 +1,11 @@
+[package]
+name = "etcdec"
+version = "0.1.0"
+description = "Decoder for ETC textures"
+authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
+repository = "https://github.com/tirr-c/unityfs.git"
+license = "MIT"
+edition = "2018"
+
+[dependencies]
+lazy_static = "1.4.0"

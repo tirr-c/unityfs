@@ -3,6 +3,7 @@ use std::mem::ManuallyDrop;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use js_sys::{Array, Object, Reflect, Uint8Array};
+use web_sys::ImageData;
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -53,6 +54,24 @@ impl UnityFs {
 pub struct Asset {
 }
 
+fn read_image_data(mut image_data: impl std::io::Read, format: etcdec::DecodeFormat, width: u32, height: u32) -> Result<ImageData, JsValue> {
+    let block_width = (width + 3) / 4;
+    let block_height = (height + 3) / 4;
+    let scanline = (width * 4) as usize;
+    let mut buf = vec![0u8; scanline * height as usize];
+    for block_y in 0..block_height {
+        let y = block_y * 4;
+        for block_x in 0..block_width {
+            let x = block_x * 4;
+            let block = etcdec::decode_single_block(&mut image_data, format).map_err(|_| JsValue::from_str("read error"))?;
+            for (block_raw, target) in block.iter().zip(buf[(4 * x as usize)..].chunks_mut(scanline).rev().skip(y as usize).take(4)) {
+                target[..16].copy_from_slice(block_raw);
+            }
+        }
+    }
+    ImageData::new_with_u8_clamped_array(wasm_bindgen::Clamped(&mut buf), width)
+}
+
 fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
     use unityfs::Data;
 
@@ -64,15 +83,53 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
             obj.unchecked_into::<JsValue>()
         },
         Data::GenericStruct { type_name, fields } => {
-            let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
-                let v = convert_data(v)?;
-                Ok(Array::of2(&JsValue::from_str(k), &v))
-            }).collect::<Result<_, _>>()?;
-            let entries = Object::from_entries(&fields)?;
-            let obj = Object::new();
-            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-            Reflect::set(&obj, &JsValue::from_str("data"), &entries)?;
-            obj.unchecked_into::<JsValue>()
+            if type_name == "Texture2D" {
+                let format = match fields.get("m_TextureFormat") {
+                    Some(Data::SInt32(34)) => etcdec::DecodeFormat::EtcRgb4,
+                    Some(Data::SInt32(45)) => etcdec::DecodeFormat::Etc2Rgb,
+                    Some(Data::SInt32(46)) => etcdec::DecodeFormat::Etc2Rgba1,
+                    Some(Data::SInt32(47)) => etcdec::DecodeFormat::Etc2Rgba8,
+                    Some(Data::SInt32(_)) => return Err(JsValue::from_str("unknown texture format")),
+                    _ => return Err(JsValue::from_str("m_TextureFormat type mismatch")),
+                };
+                let width = if let Some(Data::SInt32(width)) = fields.get("m_Width") {
+                    *width
+                } else {
+                    return Err(JsValue::from_str("m_Width type mismatch"));
+                };
+                let height = if let Some(Data::SInt32(height)) = fields.get("m_Height") {
+                    *height
+                } else {
+                    return Err(JsValue::from_str("m_Width type mismatch"));
+                };
+                let image_data: &[u8] = if let Some(Data::UInt8Array(buf)) = fields.get("image data") {
+                    buf
+                } else {
+                    return Err(JsValue::from_str("m_Width type mismatch"));
+                };
+                let image_data = std::io::Cursor::new(image_data);
+                let image_data = read_image_data(image_data, format, width as u32, height as u32)?.unchecked_into::<JsValue>();
+
+                let data = Object::new();
+                let name = fields.get("m_Name").ok_or_else(|| JsValue::from_str("m_Name expected"))?;
+                let name = convert_data(name)?;
+                Reflect::set(&data, &JsValue::from_str("m_Name"), &name)?;
+                Reflect::set(&data, &JsValue::from_str("image"), &image_data)?;
+                let obj = Object::new();
+                Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
+                Reflect::set(&obj, &JsValue::from_str("data"), &data)?;
+                obj.unchecked_into::<JsValue>()
+            } else {
+                let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
+                    let v = convert_data(v)?;
+                    Ok(Array::of2(&JsValue::from_str(k), &v))
+                }).collect::<Result<_, _>>()?;
+                let entries = Object::from_entries(&fields)?;
+                let obj = Object::new();
+                Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
+                Reflect::set(&obj, &JsValue::from_str("data"), &entries)?;
+                obj.unchecked_into::<JsValue>()
+            }
         },
         Data::GenericArray(arr) => {
             let arr = arr.iter().map(|item| convert_data(item)).collect::<Result<Array, _>>()?;

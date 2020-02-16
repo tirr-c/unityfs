@@ -8,7 +8,7 @@ license = "MIT"
 edition = "2018"
 
 [workspace]
-members = ["crates/wasm-unityfs"]
+members = ["crates/wasm-unityfs", "crates/etcdec"]
 
 [dependencies]
 lazy_static = "1.4.0"
