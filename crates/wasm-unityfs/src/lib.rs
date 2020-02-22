@@ -1,9 +1,7 @@
 use std::ptr::NonNull;
 use std::mem::ManuallyDrop;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
-use js_sys::{Array, Object, Reflect, Uint8Array};
-use web_sys::ImageData;
+use js_sys::{Array, Object, Reflect, Uint8Array, Uint8ClampedArray};
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -29,20 +27,21 @@ impl Drop for UnityFs {
 
 #[wasm_bindgen]
 impl UnityFs {
-    pub fn load(input: Vec<u8>) -> Self {
+    pub fn load(input: Vec<u8>) -> Result<UnityFs, JsValue> {
         let input = unsafe { NonNull::new_unchecked(Box::into_raw(input.into_boxed_slice())) };
         let input_ref: &'static [u8] = unsafe { &*input.as_ptr() };
-        let (_, meta) = unityfs::UnityFsMeta::parse(input_ref).unwrap_throw();
+        let (_, meta) = unityfs::UnityFsMeta::parse(input_ref).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
         let meta = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(meta))) };
         let meta_ref: &'static _ = unsafe { &*meta.as_ptr() };
         let fs = meta_ref.read_unityfs();
-        Self {
+        Ok(Self {
             input,
             meta,
             fs: ManuallyDrop::new(fs),
-        }
+        })
     }
 
+    #[wasm_bindgen(js_name = assetObjects)]
     pub fn asset_objects(&self) -> Result<Array, JsValue> {
         self.fs.assets().iter().map(|asset| {
             asset.objects().iter().map(|obj| convert_data(&obj.data)).collect::<Result<Array, _>>()
@@ -51,89 +50,129 @@ impl UnityFs {
 }
 
 #[wasm_bindgen]
-pub struct Asset {
+pub struct Texture2D {
+    name: String,
+    #[wasm_bindgen(readonly)]
+    pub width: u32,
+    #[wasm_bindgen(readonly)]
+    pub height: u32,
+    image_data: Vec<u8>,
 }
 
-fn read_image_data(mut image_data: impl std::io::Read, format: etcdec::DecodeFormat, width: u32, height: u32) -> Result<ImageData, JsValue> {
-    let block_width = (width + 3) / 4;
-    let block_height = (height + 3) / 4;
-    let scanline = (width * 4) as usize;
-    let mut buf = vec![0u8; scanline * height as usize];
-    for block_y in 0..block_height {
-        let y = block_y * 4;
-        for block_x in 0..block_width {
-            let x = block_x * 4;
-            let block = etcdec::decode_single_block(&mut image_data, format).map_err(|_| JsValue::from_str("read error"))?;
-            for (block_raw, target) in block.iter().zip(buf[(4 * x as usize)..].chunks_mut(scanline).rev().skip(y as usize).take(4)) {
-                target[..16].copy_from_slice(block_raw);
+impl Texture2D {
+    fn read(
+        name: String,
+        width: u32,
+        height: u32,
+        format: etcdec::DecodeFormat,
+        mut image_data: impl std::io::Read,
+    ) -> Result<Self, JsValue> {
+        let block_width = (width + 3) / 4;
+        let block_height = (height + 3) / 4;
+        let scanline = (width * 4) as usize;
+        let mut buf = vec![0u8; scanline * height as usize];
+        for block_y in 0..block_height {
+            let y = block_y * 4;
+            for block_x in 0..block_width {
+                let x = block_x * 4;
+                let block = etcdec::decode_single_block(&mut image_data, format).map_err(|_| JsValue::from("read error"))?;
+                for (block_raw, target) in block.iter().zip(buf[(4 * x as usize)..].chunks_mut(scanline).rev().skip(y as usize).take(4)) {
+                    target[..16].copy_from_slice(block_raw);
+                }
             }
         }
+        Ok(Self {
+            name,
+            width,
+            height,
+            image_data: buf,
+        })
     }
-    ImageData::new_with_u8_clamped_array(wasm_bindgen::Clamped(&mut buf), width)
+}
+
+#[wasm_bindgen]
+impl Texture2D {
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn image_rgba8(&self) -> Uint8ClampedArray {
+        (&*self.image_data).into()
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, JsValue> {
+        let mut buf = Vec::new();
+        let w = std::io::BufWriter::new(&mut buf);
+        let mut encoder = png::Encoder::new(w, self.width, self.height);
+        encoder.set_color(png::ColorType::RGBA);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut w = encoder.write_header().map_err(|e| JsValue::from(format!("error initializing encoder: {}", e)))?;
+        w.write_image_data(&self.image_data).map_err(|e| JsValue::from(format!("error while encoding: {}", e)))?;
+        drop(w);
+        Ok(buf)
+    }
 }
 
 fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
     use unityfs::Data;
 
-    let ret = match data {
+    Ok(match data {
         Data::GenericPrimitive { type_name, data } => {
             let obj = Object::new();
             Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
             Reflect::set(&obj, &JsValue::from_str("data"), &Uint8Array::from(*data))?;
-            obj.unchecked_into::<JsValue>()
+            obj.into()
         },
         Data::GenericStruct { type_name, fields } => {
-            if type_name == "Texture2D" {
+            let data = if type_name == "Texture2D" {
+                let name = match fields.get("m_Name") {
+                    Some(Data::String(s)) => String::from_utf8_lossy(s).into_owned(),
+                    Some(_) => return Err("m_Name type mismatch".into()),
+                    None => return Err("m_Name not found".into()),
+                };
                 let format = match fields.get("m_TextureFormat") {
                     Some(Data::SInt32(34)) => etcdec::DecodeFormat::EtcRgb4,
                     Some(Data::SInt32(45)) => etcdec::DecodeFormat::Etc2Rgb,
                     Some(Data::SInt32(46)) => etcdec::DecodeFormat::Etc2Rgba1,
                     Some(Data::SInt32(47)) => etcdec::DecodeFormat::Etc2Rgba8,
-                    Some(Data::SInt32(_)) => return Err(JsValue::from_str("unknown texture format")),
-                    _ => return Err(JsValue::from_str("m_TextureFormat type mismatch")),
+                    Some(Data::SInt32(_)) => return Err("unknown texture format".into()),
+                    Some(_) => return Err("m_TextureFormat type mismatch".into()),
+                    None => return Err("m_TextureFormat not found".into()),
                 };
-                let width = if let Some(Data::SInt32(width)) = fields.get("m_Width") {
-                    *width
-                } else {
-                    return Err(JsValue::from_str("m_Width type mismatch"));
+                let width = match fields.get("m_Width") {
+                    Some(Data::SInt32(width)) => (*width) as u32,
+                    Some(_) => return Err("m_Width type mismatch".into()),
+                    None => return Err("m_Width not found".into()),
                 };
-                let height = if let Some(Data::SInt32(height)) = fields.get("m_Height") {
-                    *height
-                } else {
-                    return Err(JsValue::from_str("m_Width type mismatch"));
+                let height = match fields.get("m_Height") {
+                    Some(Data::SInt32(height)) => (*height) as u32,
+                    Some(_) => return Err("m_Height type mismatch".into()),
+                    None => return Err("m_Height not found".into()),
                 };
-                let image_data: &[u8] = if let Some(Data::UInt8Array(buf)) = fields.get("image data") {
-                    buf
-                } else {
-                    return Err(JsValue::from_str("m_Width type mismatch"));
+                let image_data = match fields.get("image data") {
+                    Some(Data::UInt8Array(buf)) => buf,
+                    Some(_) => return Err("image data type mismatch".into()),
+                    None => return Err("image data not found".into()),
                 };
                 let image_data = std::io::Cursor::new(image_data);
-                let image_data = read_image_data(image_data, format, width as u32, height as u32)?.unchecked_into::<JsValue>();
-
-                let data = Object::new();
-                let name = fields.get("m_Name").ok_or_else(|| JsValue::from_str("m_Name expected"))?;
-                let name = convert_data(name)?;
-                Reflect::set(&data, &JsValue::from_str("m_Name"), &name)?;
-                Reflect::set(&data, &JsValue::from_str("image"), &image_data)?;
-                let obj = Object::new();
-                Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-                Reflect::set(&obj, &JsValue::from_str("data"), &data)?;
-                obj.unchecked_into::<JsValue>()
+                Texture2D::read(name, width, height, format, image_data)?.into()
             } else {
                 let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
                     let v = convert_data(v)?;
                     Ok(Array::of2(&JsValue::from_str(k), &v))
                 }).collect::<Result<_, _>>()?;
-                let entries = Object::from_entries(&fields)?;
-                let obj = Object::new();
-                Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-                Reflect::set(&obj, &JsValue::from_str("data"), &entries)?;
-                obj.unchecked_into::<JsValue>()
-            }
+                Object::from_entries(&fields)?.into()
+            };
+            let obj = Object::new();
+            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
+            Reflect::set(&obj, &JsValue::from_str("data"), &data)?;
+            obj.into()
         },
         Data::GenericArray(arr) => {
             let arr = arr.iter().map(|item| convert_data(item)).collect::<Result<Array, _>>()?;
-            arr.unchecked_into::<JsValue>()
+            arr.into()
         },
         Data::Bool(b) => JsValue::from_bool(*b),
         Data::UInt8(v) => JsValue::from_f64((*v).into()),
@@ -149,14 +188,13 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
         Data::Pair(fst, snd) => {
             let fst = convert_data(fst)?;
             let snd = convert_data(snd)?;
-            Array::of2(&fst, &snd).unchecked_into::<JsValue>()
+            Array::of2(&fst, &snd).into()
         },
         Data::UInt8Array(s) => {
-            Uint8Array::from(*s).unchecked_into::<JsValue>()
+            Uint8Array::from(*s).into()
         },
         Data::String(s) => {
-            std::str::from_utf8(*s).map(JsValue::from_str).unwrap_or_else(|_| Uint8Array::from(*s).unchecked_into::<JsValue>())
+            std::str::from_utf8(*s).map(JsValue::from_str).unwrap_or_else(|_| Uint8Array::from(*s).into())
         },
-    };
-    Ok(ret)
+    })
 }
