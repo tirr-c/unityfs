@@ -17,5 +17,10 @@ png = "0.15.3"
 unityfs = { path = "../../" }
 wee_alloc = "0.4.5"
 
+[dependencies.image]
+version = "0.23.0"
+default-features = false
+features = ["dxt"]
+
 [dependencies.wasm-bindgen]
 version = "0.2.58"

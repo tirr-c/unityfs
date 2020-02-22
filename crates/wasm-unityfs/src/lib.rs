@@ -3,6 +3,8 @@ use std::mem::ManuallyDrop;
 use wasm_bindgen::prelude::*;
 use js_sys::{Array, Object, Reflect, Uint8Array, Uint8ClampedArray};
 
+use image::dxt;
+
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
@@ -59,8 +61,13 @@ pub struct Texture2D {
     image_data: Vec<u8>,
 }
 
+enum DecodeFormat {
+    Etc(etcdec::DecodeFormat),
+    Dxt(dxt::DXTVariant),
+}
+
 impl Texture2D {
-    fn read(
+    fn read_etc(
         name: String,
         width: u32,
         height: u32,
@@ -87,6 +94,36 @@ impl Texture2D {
             height,
             image_data: buf,
         })
+    }
+
+    fn read_dxt(
+        name: String,
+        width: u32,
+        height: u32,
+        variant: dxt::DXTVariant,
+        image_data: impl std::io::Read,
+    ) -> Result<Self, JsValue> {
+        let dec = dxt::DxtDecoder::new(image_data, width, height, variant).map_err(|e| JsValue::from(format!("failed to build decoder: {}", e)))?;
+        let image = image::DynamicImage::from_decoder(dec).map_err(|e| JsValue::from(format!("failed to decode: {}", e)))?.into_rgba();
+        Ok(Self {
+            name,
+            width,
+            height,
+            image_data: image.into_vec(),
+        })
+    }
+
+    fn read(
+        name: String,
+        width: u32,
+        height: u32,
+        format: DecodeFormat,
+        image_data: impl std::io::Read,
+    ) -> Result<Self, JsValue> {
+        match format {
+            DecodeFormat::Etc(format) => Self::read_etc(name, width, height, format, image_data),
+            DecodeFormat::Dxt(variant) => Self::read_dxt(name, width, height, variant, image_data),
+        }
     }
 }
 
@@ -132,15 +169,6 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                     Some(_) => return Err("m_Name type mismatch".into()),
                     None => return Err("m_Name not found".into()),
                 };
-                let format = match fields.get("m_TextureFormat") {
-                    Some(Data::SInt32(34)) => etcdec::DecodeFormat::EtcRgb4,
-                    Some(Data::SInt32(45)) => etcdec::DecodeFormat::Etc2Rgb,
-                    Some(Data::SInt32(46)) => etcdec::DecodeFormat::Etc2Rgba1,
-                    Some(Data::SInt32(47)) => etcdec::DecodeFormat::Etc2Rgba8,
-                    Some(Data::SInt32(_)) => return Err("unknown texture format".into()),
-                    Some(_) => return Err("m_TextureFormat type mismatch".into()),
-                    None => return Err("m_TextureFormat not found".into()),
-                };
                 let width = match fields.get("m_Width") {
                     Some(Data::SInt32(width)) => (*width) as u32,
                     Some(_) => return Err("m_Width type mismatch".into()),
@@ -157,6 +185,17 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                     None => return Err("image data not found".into()),
                 };
                 let image_data = std::io::Cursor::new(image_data);
+                let format = match fields.get("m_TextureFormat") {
+                    Some(Data::SInt32(34)) => DecodeFormat::Etc(etcdec::DecodeFormat::EtcRgb4),
+                    Some(Data::SInt32(45)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgb),
+                    Some(Data::SInt32(46)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba1),
+                    Some(Data::SInt32(47)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba8),
+                    Some(Data::SInt32(10)) => DecodeFormat::Dxt(dxt::DXTVariant::DXT1),
+                    Some(Data::SInt32(12)) => DecodeFormat::Dxt(dxt::DXTVariant::DXT5),
+                    Some(Data::SInt32(_)) => return Err("unknown texture format".into()),
+                    Some(_) => return Err("m_TextureFormat type mismatch".into()),
+                    None => return Err("m_TextureFormat not found".into()),
+                };
                 Texture2D::read(name, width, height, format, image_data)?.into()
             } else {
                 let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
