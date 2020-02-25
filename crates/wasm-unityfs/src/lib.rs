@@ -83,6 +83,7 @@ impl StreamingInfo {
 enum ImageData {
     Loaded(Vec<u8>),
     Streaming(DecodeFormat, StreamingInfo),
+    Unknown,
 }
 
 #[derive(Copy, Clone)]
@@ -167,6 +168,19 @@ impl Texture2D {
             width,
             height,
             image_data: ImageData::Streaming(format, streaming_info),
+        }
+    }
+
+    fn unknown(
+        name: String,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
+            name,
+            width,
+            height,
+            image_data: ImageData::Unknown,
         }
     }
 }
@@ -277,23 +291,27 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                 };
                 let image_data = std::io::Cursor::new(image_data);
                 let format = match fields.get("m_TextureFormat") {
-                    Some(Data::SInt32(34)) => DecodeFormat::Etc(etcdec::DecodeFormat::EtcRgb4),
-                    Some(Data::SInt32(45)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgb),
-                    Some(Data::SInt32(46)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba1),
-                    Some(Data::SInt32(47)) => DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba8),
-                    Some(Data::SInt32(10)) => DecodeFormat::Dxt(dxt::DXTVariant::DXT1),
-                    Some(Data::SInt32(12)) => DecodeFormat::Dxt(dxt::DXTVariant::DXT5),
-                    Some(Data::SInt32(_)) => return Err("unknown texture format".into()),
+                    Some(Data::SInt32(34)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::EtcRgb4)),
+                    Some(Data::SInt32(45)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgb)),
+                    Some(Data::SInt32(46)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba1)),
+                    Some(Data::SInt32(47)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba8)),
+                    Some(Data::SInt32(10)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT1)),
+                    Some(Data::SInt32(12)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT5)),
+                    Some(Data::SInt32(_)) => None,
                     Some(_) => return Err("m_TextureFormat type mismatch".into()),
                     None => return Err("m_TextureFormat not found".into()),
                 };
-                let streaming_info = fields.get("m_StreamData")
-                    .ok_or_else(|| JsValue::from("m_StreamData not found"))
-                    .and_then(StreamingInfo::from_data)?;
-                if streaming_info.path.is_empty() {
-                    Texture2D::load(name, width, height, format, image_data)?.into()
+                if let Some(format) = format {
+                    let streaming_info = fields.get("m_StreamData")
+                        .ok_or_else(|| JsValue::from("m_StreamData not found"))
+                        .and_then(StreamingInfo::from_data)?;
+                    if streaming_info.path.is_empty() {
+                        Texture2D::load(name, width, height, format, image_data)?.into()
+                    } else {
+                        Texture2D::defer(name, width, height, format, streaming_info).into()
+                    }
                 } else {
-                    Texture2D::defer(name, width, height, format, streaming_info).into()
+                    Texture2D::unknown(name, width, height).into()
                 }
             } else {
                 let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
