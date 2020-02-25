@@ -1,53 +1,36 @@
-use std::ptr::NonNull;
-use std::mem::ManuallyDrop;
 use wasm_bindgen::prelude::*;
 use js_sys::{Array, Object, Reflect, Uint8Array, Uint8ClampedArray};
 
 use image::dxt;
 
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
 #[wasm_bindgen]
 pub struct UnityFs {
-    input: NonNull<[u8]>,
-    meta: NonNull<unityfs::UnityFsMeta<'static>>,
-    fs: ManuallyDrop<unityfs::UnityFs<'static>>,
-}
-
-impl Drop for UnityFs {
-    fn drop(&mut self) {
-        unsafe {
-            let input = Box::from_raw(self.input.as_ptr());
-            let meta = Box::from_raw(self.meta.as_ptr());
-            ManuallyDrop::drop(&mut self.fs);
-            drop(meta);
-            drop(input);
-        }
-    }
+    input: Vec<u8>,
 }
 
 #[wasm_bindgen]
 impl UnityFs {
-    pub fn load(input: Vec<u8>) -> Result<UnityFs, JsValue> {
-        let input = unsafe { NonNull::new_unchecked(Box::into_raw(input.into_boxed_slice())) };
-        let input_ref: &'static [u8] = unsafe { &*input.as_ptr() };
-        let (_, meta) = unityfs::UnityFsMeta::parse(input_ref).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
-        let meta = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(meta))) };
-        let meta_ref: &'static _ = unsafe { &*meta.as_ptr() };
-        let fs = meta_ref.read_unityfs();
-        Ok(Self {
-            input,
-            meta,
-            fs: ManuallyDrop::new(fs),
-        })
+    pub fn load(input: Vec<u8>) -> UnityFs {
+        console_error_panic_hook::set_once();
+        Self { input }
     }
 
-    #[wasm_bindgen(js_name = assetObjects)]
-    pub fn asset_objects(&self) -> Result<Array, JsValue> {
-        self.fs.assets().iter().map(|asset| {
-            asset.objects().iter().map(|obj| convert_data(&obj.data)).collect::<Result<Array, _>>()
-        }).collect()
+    #[wasm_bindgen(getter, js_name = mainAsset)]
+    pub fn main_asset(&self) -> Result<Object, JsValue> {
+        let (_, meta) = unityfs::UnityFsMeta::parse(&self.input).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
+        let fs = meta.read_unityfs();
+
+        let asset = fs.main_asset();
+        let name = asset.name();
+        let objects = asset
+            .objects()
+            .iter()
+            .map(|obj| convert_data(&obj.data))
+            .collect::<Result<Array, _>>()?;
+        let obj = Object::new();
+        Reflect::set(&obj, &"name".into(), &name.into())?;
+        Reflect::set(&obj, &"objects".into(), &objects.into())?;
+        Ok(obj)
     }
 }
 
@@ -58,9 +41,51 @@ pub struct Texture2D {
     pub width: u32,
     #[wasm_bindgen(readonly)]
     pub height: u32,
-    image_data: Vec<u8>,
+    image_data: ImageData,
 }
 
+struct StreamingInfo {
+    path: String,
+    offset: u32,
+    size: u32,
+}
+
+impl StreamingInfo {
+    fn from_data(data: &unityfs::Data<'_>) -> Result<Self, JsValue> {
+        let fields = match data {
+            unityfs::Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => {
+                fields
+            },
+            _ => return Err(JsValue::from("type mismatch")),
+        };
+        let path = match fields.get("path") {
+            Some(unityfs::Data::String(s)) => {
+                String::from_utf8_lossy(s).into_owned()
+            },
+            _ => return Err(JsValue::from("type mismatch")),
+        };
+        let offset = match fields.get("offset") {
+            Some(unityfs::Data::UInt32(v)) => *v,
+            _ => return Err(JsValue::from("type mismatch")),
+        };
+        let size = match fields.get("size") {
+            Some(unityfs::Data::UInt32(v)) => *v,
+            _ => return Err(JsValue::from("type mismatch")),
+        };
+        Ok(Self {
+            path,
+            offset,
+            size,
+        })
+    }
+}
+
+enum ImageData {
+    Loaded(Vec<u8>),
+    Streaming(DecodeFormat, StreamingInfo),
+}
+
+#[derive(Copy, Clone)]
 enum DecodeFormat {
     Etc(etcdec::DecodeFormat),
     Dxt(dxt::DXTVariant),
@@ -68,12 +93,11 @@ enum DecodeFormat {
 
 impl Texture2D {
     fn read_etc(
-        name: String,
         width: u32,
         height: u32,
         format: etcdec::DecodeFormat,
         mut image_data: impl std::io::Read,
-    ) -> Result<Self, JsValue> {
+    ) -> Result<Vec<u8>, JsValue> {
         let block_width = (width + 3) / 4;
         let block_height = (height + 3) / 4;
         let scanline = (width * 4) as usize;
@@ -88,41 +112,61 @@ impl Texture2D {
                 }
             }
         }
-        Ok(Self {
-            name,
-            width,
-            height,
-            image_data: buf,
-        })
+        Ok(buf)
     }
 
     fn read_dxt(
-        name: String,
         width: u32,
         height: u32,
         variant: dxt::DXTVariant,
         image_data: impl std::io::Read,
-    ) -> Result<Self, JsValue> {
+    ) -> Result<Vec<u8>, JsValue> {
         let dec = dxt::DxtDecoder::new(image_data, width, height, variant).map_err(|e| JsValue::from(format!("failed to build decoder: {}", e)))?;
-        let image = image::DynamicImage::from_decoder(dec).map_err(|e| JsValue::from(format!("failed to decode: {}", e)))?.into_rgba();
-        Ok(Self {
-            name,
-            width,
-            height,
-            image_data: image.into_vec(),
-        })
+        let image = image::DynamicImage::from_decoder(dec).map_err(|e| JsValue::from(format!("failed to decode: {}", e)))?;
+        let image = image.flipv().into_rgba();
+        Ok(image.into_vec())
     }
 
     fn read(
+        width: u32,
+        height: u32,
+        format: DecodeFormat,
+        image_data: impl std::io::Read,
+    ) -> Result<Vec<u8>, JsValue> {
+        match format {
+            DecodeFormat::Etc(format) => Self::read_etc(width, height, format, image_data),
+            DecodeFormat::Dxt(variant) => Self::read_dxt(width, height, variant, image_data),
+        }
+    }
+
+    fn load(
         name: String,
         width: u32,
         height: u32,
         format: DecodeFormat,
         image_data: impl std::io::Read,
     ) -> Result<Self, JsValue> {
-        match format {
-            DecodeFormat::Etc(format) => Self::read_etc(name, width, height, format, image_data),
-            DecodeFormat::Dxt(variant) => Self::read_dxt(name, width, height, variant, image_data),
+        let image_data = Texture2D::read(width, height, format, image_data)?;
+        Ok(Self {
+            name,
+            width,
+            height,
+            image_data: ImageData::Loaded(image_data),
+        })
+    }
+
+    fn defer(
+        name: String,
+        width: u32,
+        height: u32,
+        format: DecodeFormat,
+        streaming_info: StreamingInfo,
+    ) -> Self {
+        Self {
+            name,
+            width,
+            height,
+            image_data: ImageData::Streaming(format, streaming_info),
         }
     }
 }
@@ -135,20 +179,67 @@ impl Texture2D {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn image_rgba8(&self) -> Uint8ClampedArray {
-        (&*self.image_data).into()
+    pub fn image_rgba8(&self) -> Option<Uint8ClampedArray> {
+        match &self.image_data {
+            ImageData::Loaded(data) => Some((&**data).into()),
+            _ => None,
+        }
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>, JsValue> {
+    pub fn encode(&self) -> Result<Option<Vec<u8>>, JsValue> {
+        let image_data = match &self.image_data {
+            ImageData::Loaded(data) => &**data,
+            _ => return Ok(None),
+        };
         let mut buf = Vec::new();
         let w = std::io::BufWriter::new(&mut buf);
         let mut encoder = png::Encoder::new(w, self.width, self.height);
+        encoder.set_compression(png::Compression::Fast);
         encoder.set_color(png::ColorType::RGBA);
         encoder.set_depth(png::BitDepth::Eight);
         let mut w = encoder.write_header().map_err(|e| JsValue::from(format!("error initializing encoder: {}", e)))?;
-        w.write_image_data(&self.image_data).map_err(|e| JsValue::from(format!("error while encoding: {}", e)))?;
+        w.write_image_data(image_data).map_err(|e| JsValue::from(format!("error while encoding: {}", e)))?;
         drop(w);
-        Ok(buf)
+        Ok(Some(buf))
+    }
+
+    #[wasm_bindgen(js_name = assetDependency)]
+    pub fn asset_dependency(&self) -> Option<String> {
+        match &self.image_data {
+            ImageData::Streaming(_, StreamingInfo { path, .. }) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    #[wasm_bindgen(js_name = tryResolve)]
+    pub fn try_resolve(&mut self, fs: &UnityFs) -> Result<(), JsValue> {
+        let (_, meta) = unityfs::UnityFsMeta::parse(&fs.input).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
+        let fs = meta.read_unityfs();
+
+        let (format, streaming_info) = match &self.image_data {
+            ImageData::Streaming(format, val) => (format, val),
+            _ => return Ok(()),
+        };
+        if !streaming_info.path.starts_with("archive:/") {
+            return Ok(());
+        }
+        let mut path_segments = streaming_info.path[9..].split('/');
+        let (bundle_name, resource_name) = match (path_segments.next(), path_segments.next()) {
+            (Some(x), Some(y)) => (x, y),
+            _ => return Ok(()),
+        };
+        if fs.name() != bundle_name {
+            return Ok(());
+        }
+        let resource = if let Some(buf) = fs.resource(resource_name) {
+            buf
+        } else {
+            return Ok(());
+        };
+        let buf = &resource[streaming_info.offset as usize..][..streaming_info.size as usize];
+        let image_data = Texture2D::read(self.width, self.height, *format, std::io::Cursor::new(buf))?;
+        self.image_data = ImageData::Loaded(image_data);
+        Ok(())
     }
 }
 
@@ -159,7 +250,7 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
         Data::GenericPrimitive { type_name, data } => {
             let obj = Object::new();
             Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-            Reflect::set(&obj, &JsValue::from_str("data"), &Uint8Array::from(*data))?;
+            Reflect::set(&obj, &JsValue::from_str("data"), &Uint8Array::from(&**data))?;
             obj.into()
         },
         Data::GenericStruct { type_name, fields } => {
@@ -196,7 +287,14 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                     Some(_) => return Err("m_TextureFormat type mismatch".into()),
                     None => return Err("m_TextureFormat not found".into()),
                 };
-                Texture2D::read(name, width, height, format, image_data)?.into()
+                let streaming_info = fields.get("m_StreamData")
+                    .ok_or_else(|| JsValue::from("m_StreamData not found"))
+                    .and_then(StreamingInfo::from_data)?;
+                if streaming_info.path.is_empty() {
+                    Texture2D::load(name, width, height, format, image_data)?.into()
+                } else {
+                    Texture2D::defer(name, width, height, format, streaming_info).into()
+                }
             } else {
                 let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
                     let v = convert_data(v)?;
@@ -230,10 +328,10 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
             Array::of2(&fst, &snd).into()
         },
         Data::UInt8Array(s) => {
-            Uint8Array::from(*s).into()
+            Uint8Array::from(&**s).into()
         },
         Data::String(s) => {
-            std::str::from_utf8(*s).map(JsValue::from_str).unwrap_or_else(|_| Uint8Array::from(*s).into())
+            std::str::from_utf8(&**s).map(JsValue::from_str).unwrap_or_else(|_| Uint8Array::from(&**s).into())
         },
     })
 }

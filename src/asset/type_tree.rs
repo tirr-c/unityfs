@@ -137,7 +137,7 @@ impl<'a> TypeTree<'a> {
             needs_align |= self.children[0].needs_align();
             let (input, length) = u32!(input, endianness)?;
             let (bytes, input) = input.split_at(length as usize);
-            (input, Data::String(bytes))
+            (input, Data::String(bytes.into()))
         } else if self.type_name == "pair" {
             debug_assert_eq!(self.children.len(), 2);
             let (input, fst) = self.children[0].read(input, endianness, offset)?;
@@ -152,7 +152,7 @@ impl<'a> TypeTree<'a> {
             let (input, length) = u32!(input, endianness)?;
             if element_type.type_name == "UInt8" {
                 let (bytes, input) = input.split_at(length as usize);
-                (input, Data::UInt8Array(bytes))
+                (input, Data::UInt8Array(bytes.into()))
             } else {
                 let mut input = input;
                 let v = (0..length).map(|_| {
@@ -183,7 +183,7 @@ impl<'a> TypeTree<'a> {
                 "SInt64" => Data::SInt64(i64!(data, endianness)?.1),
                 "float" => Data::Float(f32::from_bits(u32!(data, endianness)?.1)),
                 "double" => Data::Double(f64::from_bits(u64!(data, endianness)?.1)),
-                _ => Data::GenericPrimitive { type_name: self.type_name.clone(), data },
+                _ => Data::GenericPrimitive { type_name: self.type_name.clone(), data: data.into() },
             };
             (input, data)
         } else {
@@ -210,7 +210,7 @@ impl<'a> TypeTree<'a> {
 pub enum Data<'b> {
     GenericPrimitive {
         type_name: Cow<'b, str>,
-        data: &'b [u8],
+        data: Cow<'b, [u8]>,
     },
     GenericArray(Vec<Data<'b>>),
     GenericStruct {
@@ -228,8 +228,8 @@ pub enum Data<'b> {
     SInt64(i64),
     Float(f32),
     Double(f64),
-    String(&'b [u8]),
-    UInt8Array(&'b [u8]),
+    String(Cow<'b, [u8]>),
+    UInt8Array(Cow<'b, [u8]>),
     Pair(Box<Data<'b>>, Box<Data<'b>>),
 }
 
@@ -275,6 +275,36 @@ impl std::fmt::Debug for Data<'_> {
             Data::Pair(fst, snd) => {
                 fmt.debug_tuple("Pair").field(fst).field(snd).finish()
             },
+        }
+    }
+}
+
+impl Data<'_> {
+    pub fn clone_owned(&self) -> Data<'static> {
+        match self {
+            Data::Pair(f, s) => Data::Pair(Box::new(f.clone_owned()), Box::new(s.clone_owned())),
+            Data::UInt8Array(b) => Data::UInt8Array(b.clone().into_owned().into()),
+            Data::String(b) => Data::String(b.clone().into_owned().into()),
+            Data::GenericArray(v) => Data::GenericArray(v.iter().map(Self::clone_owned).collect()),
+            Data::GenericStruct { type_name, fields } => Data::GenericStruct {
+                type_name: type_name.clone().into_owned().into(),
+                fields: fields.iter().map(|(k, v)| (k.clone().into_owned().into(), v.clone_owned())).collect(),
+            },
+            Data::GenericPrimitive { type_name, data } => Data::GenericPrimitive {
+                type_name: type_name.clone().into_owned().into(),
+                data: data.clone().into_owned().into(),
+            },
+            Data::Bool(v) => Data::Bool(*v),
+            Data::UInt8(v) => Data::UInt8(*v),
+            Data::UInt16(v) => Data::UInt16(*v),
+            Data::UInt32(v) => Data::UInt32(*v),
+            Data::UInt64(v) => Data::UInt64(*v),
+            Data::SInt8(v) => Data::SInt8(*v),
+            Data::SInt16(v) => Data::SInt16(*v),
+            Data::SInt32(v) => Data::SInt32(*v),
+            Data::SInt64(v) => Data::SInt64(*v),
+            Data::Float(v) => Data::Float(*v),
+            Data::Double(v) => Data::Double(*v),
         }
     }
 }

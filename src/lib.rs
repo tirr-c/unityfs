@@ -6,6 +6,7 @@ mod util;
 
 use crate::common_parser::read_string;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use nom::{
     number::complete as nom_number,
     IResult,
@@ -87,13 +88,25 @@ impl<'a> UnityFsMeta<'a> {
     }
 
     pub fn read_unityfs(&'a self) -> UnityFs<'a> {
-        let assets = self.metadata.nodes.iter().map(|node| {
+        let resources = self.metadata.nodes.iter().map(|node| {
             let block = self.storage.read_range(node.offset..(node.offset + node.size));
-            Asset::parse(node.name.clone(), block, node.offset).map(|(_, asset)| asset)
-        }).collect::<Result<_, _>>().unwrap();
+            (node.name.clone(), block)
+        }).collect::<HashMap<_, _>>();
+        let metadata::NodeInfo {
+            name: main_asset_name,
+            offset: main_asset_offset,
+            ..
+        } = &self.metadata.nodes[0];
+        let main_asset_resource = *resources.get(main_asset_name).unwrap();
+        let (_, main_asset) = Asset::parse(
+            main_asset_name.into(),
+            main_asset_resource,
+            *main_asset_offset,
+        ).unwrap();
         UnityFs {
             guid: self.metadata.guid,
-            assets,
+            main_asset,
+            resources,
         }
     }
 }
@@ -101,7 +114,8 @@ impl<'a> UnityFsMeta<'a> {
 #[derive(Debug)]
 pub struct UnityFs<'a> {
     guid: [u8; 16],
-    assets: Vec<Asset<'a>>,
+    main_asset: Asset<'a>,
+    resources: HashMap<String, &'a [u8]>,
 }
 
 impl<'a> UnityFs<'a> {
@@ -109,7 +123,15 @@ impl<'a> UnityFs<'a> {
         self.guid
     }
 
-    pub fn assets(&self) -> &[Asset<'a>] {
-        &self.assets
+    pub fn name(&self) -> &str {
+        self.main_asset.name()
+    }
+
+    pub fn main_asset(&self) -> &Asset<'a> {
+        &self.main_asset
+    }
+
+    pub fn resource(&self, name: &str) -> Option<&'a [u8]> {
+        self.resources.get(name).copied()
     }
 }

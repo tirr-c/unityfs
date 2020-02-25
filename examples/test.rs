@@ -5,5 +5,5 @@ fn main() {
 
     let (_, meta) = unityfs::UnityFsMeta::parse(&buf).unwrap();
     let fs = meta.read_unityfs();
-    println!("{:#?}", fs.assets()[0].objects());
+    println!("{:#?}", fs.main_asset().objects());
 }
