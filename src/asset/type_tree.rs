@@ -66,13 +66,18 @@ fn parse_blob(input: &[u8], endianness: Endianness, format: u32) -> IResult<&[u8
     let (data, input) = input.split_at(buffer_bytes as usize);
 
     let get_string = |offset: u32| -> IResult<&[u8], Cow<'_, str>> {
-        if offset >= 0x80000000 {
+        let slice = if offset >= 0x80000000 {
             let offset = (offset & 0x7fffffff) as usize;
-            read_string(&STRINGS_DAT[offset..], None)
+            &STRINGS_DAT[offset..]
         } else if offset < data.len() as u32 {
-            read_string(&data[(offset as usize)..], None)
+            &data[(offset as usize)..]
         } else {
-            Ok((b"".as_ref(), "(null)".into()))
+            return Ok((b"".as_ref(), "(null)".into()));
+        };
+        if slice.is_empty() {
+            Ok((b"".as_ref(), "".into()))
+        } else {
+            read_string(slice, None)
         }
     };
 
