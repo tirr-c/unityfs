@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use js_sys::{Array, Object, Reflect, Uint8Array, Uint8ClampedArray};
+use js_sys::{Array, Error, Object, Reflect, Uint8Array, Uint8ClampedArray, TypeError};
 
 use image::dxt;
 
@@ -17,7 +17,8 @@ impl UnityFs {
 
     #[wasm_bindgen(getter, js_name = mainAsset)]
     pub fn main_asset(&self) -> Result<Object, JsValue> {
-        let (_, meta) = unityfs::UnityFsMeta::parse(&self.input).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
+        let (_, meta) = unityfs::UnityFsMeta::parse(&self.input)
+            .map_err(|e| Error::new(&format!("parse failed: {:?}", e)))?;
         let fs = meta.read_unityfs();
 
         let asset = fs.main_asset();
@@ -56,21 +57,21 @@ impl StreamingInfo {
             unityfs::Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => {
                 fields
             },
-            _ => return Err(JsValue::from("type mismatch")),
+            _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let path = match fields.get("path") {
             Some(unityfs::Data::String(s)) => {
                 String::from_utf8_lossy(s).into_owned()
             },
-            _ => return Err(JsValue::from("type mismatch")),
+            _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let offset = match fields.get("offset") {
             Some(unityfs::Data::UInt32(v)) => *v,
-            _ => return Err(JsValue::from("type mismatch")),
+            _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let size = match fields.get("size") {
             Some(unityfs::Data::UInt32(v)) => *v,
-            _ => return Err(JsValue::from("type mismatch")),
+            _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         Ok(Self {
             path,
@@ -107,7 +108,8 @@ impl Texture2D {
             let y = block_y * 4;
             for block_x in 0..block_width {
                 let x = block_x * 4;
-                let block = etcdec::decode_single_block(&mut image_data, format).map_err(|_| JsValue::from("read error"))?;
+                let block = etcdec::decode_single_block(&mut image_data, format)
+                    .map_err(|_| Error::new("read error"))?;
                 for (block_raw, target) in block.iter().zip(buf[(4 * x as usize)..].chunks_mut(scanline).rev().skip(y as usize).take(4)) {
                     target[..16].copy_from_slice(block_raw);
                 }
@@ -122,8 +124,10 @@ impl Texture2D {
         variant: dxt::DXTVariant,
         image_data: impl std::io::Read,
     ) -> Result<Vec<u8>, JsValue> {
-        let dec = dxt::DxtDecoder::new(image_data, width, height, variant).map_err(|e| JsValue::from(format!("failed to build decoder: {}", e)))?;
-        let image = image::DynamicImage::from_decoder(dec).map_err(|e| JsValue::from(format!("failed to decode: {}", e)))?;
+        let dec = dxt::DxtDecoder::new(image_data, width, height, variant)
+            .map_err(|e| Error::new(&format!("failed to build decoder: {}", e)))?;
+        let image = image::DynamicImage::from_decoder(dec)
+            .map_err(|e| Error::new(&format!("failed to decode: {}", e)))?;
         let image = image.flipv().into_rgba();
         Ok(image.into_vec())
     }
@@ -211,8 +215,11 @@ impl Texture2D {
         encoder.set_compression(png::Compression::Fast);
         encoder.set_color(png::ColorType::RGBA);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut w = encoder.write_header().map_err(|e| JsValue::from(format!("error initializing encoder: {}", e)))?;
-        w.write_image_data(image_data).map_err(|e| JsValue::from(format!("error while encoding: {}", e)))?;
+        let mut w = encoder
+            .write_header()
+            .map_err(|e| Error::new(&format!("error initializing encoder: {}", e)))?;
+        w.write_image_data(image_data)
+            .map_err(|e| Error::new(&format!("error while encoding: {}", e)))?;
         drop(w);
         Ok(Some(buf))
     }
@@ -227,7 +234,8 @@ impl Texture2D {
 
     #[wasm_bindgen(js_name = tryResolve)]
     pub fn try_resolve(&mut self, fs: &UnityFs) -> Result<(), JsValue> {
-        let (_, meta) = unityfs::UnityFsMeta::parse(&fs.input).map_err(|e| JsValue::from(format!("parse failed: {:?}", e)))?;
+        let (_, meta) = unityfs::UnityFsMeta::parse(&fs.input)
+            .map_err(|e| Error::new(&format!("parse failed: {:?}", e)))?;
         let fs = meta.read_unityfs();
 
         let (format, streaming_info) = match &self.image_data {
@@ -271,23 +279,23 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
             let data = if type_name == "Texture2D" {
                 let name = match fields.get("m_Name") {
                     Some(Data::String(s)) => String::from_utf8_lossy(s).into_owned(),
-                    Some(_) => return Err("m_Name type mismatch".into()),
-                    None => return Err("m_Name not found".into()),
+                    Some(_) => return Err(Error::new("m_Name type mismatch").into()),
+                    None => return Err(Error::new("m_Name not found").into()),
                 };
                 let width = match fields.get("m_Width") {
                     Some(Data::SInt32(width)) => (*width) as u32,
-                    Some(_) => return Err("m_Width type mismatch".into()),
-                    None => return Err("m_Width not found".into()),
+                    Some(_) => return Err(Error::new("m_Width type mismatch").into()),
+                    None => return Err(Error::new("m_Width not found").into()),
                 };
                 let height = match fields.get("m_Height") {
                     Some(Data::SInt32(height)) => (*height) as u32,
-                    Some(_) => return Err("m_Height type mismatch".into()),
-                    None => return Err("m_Height not found".into()),
+                    Some(_) => return Err(Error::new("m_Height type mismatch").into()),
+                    None => return Err(Error::new("m_Height not found").into()),
                 };
                 let image_data = match fields.get("image data") {
                     Some(Data::UInt8Array(buf)) => buf,
-                    Some(_) => return Err("image data type mismatch".into()),
-                    None => return Err("image data not found".into()),
+                    Some(_) => return Err(Error::new("image data type mismatch").into()),
+                    None => return Err(Error::new("image data not found").into()),
                 };
                 let image_data = std::io::Cursor::new(image_data);
                 let format = match fields.get("m_TextureFormat") {
@@ -298,12 +306,12 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                     Some(Data::SInt32(10)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT1)),
                     Some(Data::SInt32(12)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT5)),
                     Some(Data::SInt32(_)) => None,
-                    Some(_) => return Err("m_TextureFormat type mismatch".into()),
-                    None => return Err("m_TextureFormat not found".into()),
+                    Some(_) => return Err(Error::new("m_TextureFormat type mismatch").into()),
+                    None => return Err(Error::new("m_TextureFormat not found").into()),
                 };
                 if let Some(format) = format {
                     let streaming_info = fields.get("m_StreamData")
-                        .ok_or_else(|| JsValue::from("m_StreamData not found"))
+                        .ok_or_else(|| Error::new("m_StreamData not found").into())
                         .and_then(StreamingInfo::from_data)?;
                     if streaming_info.path.is_empty() {
                         Texture2D::load(name, width, height, format, image_data)?.into()
