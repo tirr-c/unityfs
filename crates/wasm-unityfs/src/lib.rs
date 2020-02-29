@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use js_sys::{Array, Error, Object, Reflect, Uint8Array, Uint8ClampedArray, TypeError};
+use js_sys::{Array, Error, Object, Reflect, Uint8Array, TypeError};
 
 use image::dxt;
 
@@ -138,10 +138,24 @@ impl Texture2D {
         format: DecodeFormat,
         image_data: impl std::io::Read,
     ) -> Result<Vec<u8>, JsValue> {
-        match format {
+        let raw = match format {
             DecodeFormat::Etc(format) => Self::read_etc(width, height, format, image_data),
             DecodeFormat::Dxt(variant) => Self::read_dxt(width, height, variant, image_data),
-        }
+        }?;
+
+        let mut buf = Vec::new();
+        let w = std::io::BufWriter::new(&mut buf);
+        let mut encoder = png::Encoder::new(w, width, height);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_color(png::ColorType::RGBA);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut w = encoder
+            .write_header()
+            .map_err(|e| Error::new(&format!("error initializing encoder: {}", e)))?;
+        w.write_image_data(&raw)
+            .map_err(|e| Error::new(&format!("error while encoding: {}", e)))?;
+        drop(w);
+        Ok(buf)
     }
 
     fn load(
@@ -196,32 +210,20 @@ impl Texture2D {
         self.name.clone()
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn image_rgba8(&self) -> Option<Uint8ClampedArray> {
+    #[wasm_bindgen(getter, js_name = imagePngPtr)]
+    pub fn image_png_ptr(&self) -> *const u8 {
         match &self.image_data {
-            ImageData::Loaded(data) => Some((&**data).into()),
-            _ => None,
+            ImageData::Loaded(data) => data.as_ptr(),
+            _ => std::ptr::null(),
         }
     }
 
-    pub fn encode(&self) -> Result<Option<Vec<u8>>, JsValue> {
-        let image_data = match &self.image_data {
-            ImageData::Loaded(data) => &**data,
-            _ => return Ok(None),
-        };
-        let mut buf = Vec::new();
-        let w = std::io::BufWriter::new(&mut buf);
-        let mut encoder = png::Encoder::new(w, self.width, self.height);
-        encoder.set_compression(png::Compression::Fast);
-        encoder.set_color(png::ColorType::RGBA);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut w = encoder
-            .write_header()
-            .map_err(|e| Error::new(&format!("error initializing encoder: {}", e)))?;
-        w.write_image_data(image_data)
-            .map_err(|e| Error::new(&format!("error while encoding: {}", e)))?;
-        drop(w);
-        Ok(Some(buf))
+    #[wasm_bindgen(getter, js_name = imagePngLen)]
+    pub fn image_png_len(&self) -> Option<usize> {
+        match &self.image_data {
+            ImageData::Loaded(data) => Some(data.len()),
+            _ => None,
+        }
     }
 
     #[wasm_bindgen(js_name = assetDependency)]
