@@ -2,6 +2,7 @@ use wasm_bindgen::prelude::*;
 use js_sys::{Array, Error, Object, Reflect, Uint8Array, TypeError};
 
 use image::dxt;
+use unityfs::Data;
 
 #[wasm_bindgen]
 pub struct UnityFs {
@@ -26,12 +27,60 @@ impl UnityFs {
         let objects = asset
             .objects()
             .iter()
-            .map(|obj| convert_data(&obj.data))
-            .collect::<Result<Array, _>>()?;
+            .map(UnityObject::from_object)
+            .map(JsValue::from)
+            .collect::<Array>();
         let obj = Object::new();
         Reflect::set(&obj, &"name".into(), &name.into())?;
         Reflect::set(&obj, &"objects".into(), &objects.into())?;
         Ok(obj)
+    }
+}
+
+#[wasm_bindgen]
+pub struct UnityObject {
+    data: Data<'static>,
+}
+
+impl UnityObject {
+    fn from_object(val: &unityfs::Object<'_>) -> Self {
+        Self::from_data(&val.data)
+    }
+
+    fn from_data(val: &Data<'_>) -> Self {
+        Self {
+            data: val.clone_owned(),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl UnityObject {
+    #[wasm_bindgen(getter, js_name = "type")]
+    pub fn type_name(&self) -> String {
+        match &self.data {
+            Data::Bool(_)   => "bool".into(),
+            Data::UInt8(_)  => "UInt8".into(),
+            Data::UInt16(_) => "UInt16".into(),
+            Data::UInt32(_) => "UInt32".into(),
+            Data::UInt64(_) => "UInt64".into(),
+            Data::SInt8(_)  => "SInt8".into(),
+            Data::SInt16(_) => "SInt16".into(),
+            Data::SInt32(_) => "SInt32".into(),
+            Data::SInt64(_) => "SInt64".into(),
+            Data::Float(_)  => "float".into(),
+            Data::Double(_) => "double".into(),
+            Data::UInt8Array(_) => "ByteArray".into(),
+            Data::String(_) => "string".into(),
+            Data::Pair(..) => "pair".into(),
+            Data::GenericArray(_) => "Array".into(),
+            Data::GenericStruct { type_name, .. } |
+            Data::GenericPrimitive { type_name, .. } => type_name.clone().into_owned(),
+        }
+    }
+
+    pub fn data(&self) -> Result<JsValue, JsValue> {
+        convert_data(&self.data)
     }
 }
 
@@ -52,25 +101,25 @@ struct StreamingInfo {
 }
 
 impl StreamingInfo {
-    fn from_data(data: &unityfs::Data<'_>) -> Result<Self, JsValue> {
+    fn from_data(data: &Data<'_>) -> Result<Self, JsValue> {
         let fields = match data {
-            unityfs::Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => {
+            Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => {
                 fields
             },
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let path = match fields.get("path") {
-            Some(unityfs::Data::String(s)) => {
+            Some(Data::String(s)) => {
                 String::from_utf8_lossy(s).into_owned()
             },
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let offset = match fields.get("offset") {
-            Some(unityfs::Data::UInt32(v)) => *v,
+            Some(Data::UInt32(v)) => *v,
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let size = match fields.get("size") {
-            Some(unityfs::Data::UInt32(v)) => *v,
+            Some(Data::UInt32(v)) => *v,
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         Ok(Self {
@@ -267,18 +316,35 @@ impl Texture2D {
     }
 }
 
-fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
-    use unityfs::Data;
+fn convert_shallow(data: &Data<'_>) -> JsValue {
+    match data {
+        Data::Bool(b) => JsValue::from_bool(*b),
+        Data::UInt8(v) => JsValue::from_f64((*v).into()),
+        Data::UInt16(v) => JsValue::from_f64((*v).into()),
+        Data::UInt32(v) => JsValue::from_f64((*v).into()),
+        Data::UInt64(v) => JsValue::from_f64(*v as f64),
+        Data::SInt8(v) => JsValue::from_f64((*v).into()),
+        Data::SInt16(v) => JsValue::from_f64((*v).into()),
+        Data::SInt32(v) => JsValue::from_f64((*v).into()),
+        Data::SInt64(v) => JsValue::from_f64(*v as f64),
+        Data::Float(v) => JsValue::from_f64((*v).into()),
+        Data::Double(v) => JsValue::from_f64((*v).into()),
+        Data::String(s) => {
+            std::str::from_utf8(&**s)
+                .map(JsValue::from_str)
+                .unwrap_or_else(|_| Uint8Array::from(&**s).into())
+        },
+        v => UnityObject::from_data(v).into(),
+    }
+}
 
+fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
     Ok(match data {
-        Data::GenericPrimitive { type_name, data } => {
-            let obj = Object::new();
-            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-            Reflect::set(&obj, &JsValue::from_str("data"), &Uint8Array::from(&**data))?;
-            obj.into()
+        Data::GenericPrimitive { data, .. } => {
+            Uint8Array::from(&**data).into()
         },
         Data::GenericStruct { type_name, fields } => {
-            let data = if type_name == "Texture2D" {
+            if type_name == "Texture2D" {
                 let name = match fields.get("m_Name") {
                     Some(Data::String(s)) => String::from_utf8_lossy(s).into_owned(),
                     Some(_) => return Err(Error::new("m_Name type mismatch").into()),
@@ -325,18 +391,14 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
                 }
             } else {
                 let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
-                    let v = convert_data(v)?;
+                    let v = convert_shallow(v);
                     Ok(Array::of2(&JsValue::from_str(k), &v))
                 }).collect::<Result<_, _>>()?;
                 Object::from_entries(&fields)?.into()
-            };
-            let obj = Object::new();
-            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_name))?;
-            Reflect::set(&obj, &JsValue::from_str("data"), &data)?;
-            obj.into()
+            }
         },
         Data::GenericArray(arr) => {
-            let arr = arr.iter().map(|item| convert_data(item)).collect::<Result<Array, _>>()?;
+            let arr = arr.iter().map(convert_shallow).collect::<Array>();
             arr.into()
         },
         Data::Bool(b) => JsValue::from_bool(*b),
@@ -351,8 +413,8 @@ fn convert_data(data: &unityfs::Data<'_>) -> Result<JsValue, JsValue> {
         Data::Float(v) => JsValue::from_f64((*v).into()),
         Data::Double(v) => JsValue::from_f64((*v).into()),
         Data::Pair(fst, snd) => {
-            let fst = convert_data(fst)?;
-            let snd = convert_data(snd)?;
+            let fst = UnityObject::from_data(fst).into();
+            let snd = UnityObject::from_data(snd).into();
             Array::of2(&fst, &snd).into()
         },
         Data::UInt8Array(s) => {

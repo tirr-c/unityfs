@@ -254,7 +254,7 @@ impl std::fmt::Debug for Data<'_> {
                 }
                 s.finish()
             },
-            Data::Bool(data) => write!(fmt, "Bool({:?})", data),
+            Data::Bool(data)   => write!(fmt, "Bool({:?})", data),
             Data::UInt8(data)  => write!(fmt, "UInt8({:?})", data),
             Data::UInt16(data) => write!(fmt, "UInt16({:?})", data),
             Data::UInt32(data) => write!(fmt, "UInt32({:?})", data),
@@ -263,7 +263,7 @@ impl std::fmt::Debug for Data<'_> {
             Data::SInt16(data) => write!(fmt, "SInt16({:?})", data),
             Data::SInt32(data) => write!(fmt, "SInt32({:?})", data),
             Data::SInt64(data) => write!(fmt, "SInt64({:?})", data),
-            Data::Float(data) => write!(fmt, "Float({:?})", data),
+            Data::Float(data)  => write!(fmt, "Float({:?})", data),
             Data::Double(data) => write!(fmt, "Double({:?})", data),
             Data::String(b) => {
                 if let Ok(s) = std::str::from_utf8(b) {
