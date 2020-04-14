@@ -5,14 +5,11 @@ mod metadata;
 mod util;
 
 use crate::common_parser::read_string;
+use nom::{number::complete as nom_number, IResult};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use nom::{
-    number::complete as nom_number,
-    IResult,
-};
 
-pub use asset::{Asset, Object, Data};
+pub use asset::{Asset, Data, Object};
 pub use compression::CompressedBlock;
 pub use metadata::Metadata;
 
@@ -45,6 +42,10 @@ impl<'a> UnityFsMeta<'a> {
 
 impl<'a> UnityFsMeta<'a> {
     pub fn parse(input: &'a [u8]) -> IResult<&[u8], Self> {
+        nom::error::context(
+            "should start in 'Unity'",
+            nom::bytes::complete::tag(b"Unity"),
+        )(input)?;
         let (input, signature) = read_string(input, None)?;
         let (input, format_version) = nom_number::be_u32(input)?;
         let (input, unity_version) = read_string(input, None)?;
@@ -70,28 +71,42 @@ impl<'a> UnityFsMeta<'a> {
         };
 
         let mut left = input;
-        let blocks = metadata.blocks.iter().map(|block| {
-            let (data, remainder) = left.split_at(block.c_size as usize);
-            left = remainder;
-            CompressedBlock::from_slice(block.u_size, (block.flags & 0x3f) as u32, data)
-        }).collect();
+        let blocks = metadata
+            .blocks
+            .iter()
+            .map(|block| {
+                let (data, remainder) = left.split_at(block.c_size as usize);
+                left = remainder;
+                CompressedBlock::from_slice(block.u_size, (block.flags & 0x3f) as u32, data)
+            })
+            .collect();
         let storage = compression::CompressedBlockStorage::from_blocks(blocks);
 
-        Ok((left, UnityFsMeta {
-            signature,
-            format_version,
-            unity_version,
-            generator_version,
-            metadata,
-            storage,
-        }))
+        Ok((
+            left,
+            UnityFsMeta {
+                signature,
+                format_version,
+                unity_version,
+                generator_version,
+                metadata,
+                storage,
+            },
+        ))
     }
 
     pub fn read_unityfs(&'a self) -> UnityFs<'a> {
-        let resources = self.metadata.nodes.iter().map(|node| {
-            let block = self.storage.read_range(node.offset..(node.offset + node.size));
-            (node.name.clone(), block)
-        }).collect::<HashMap<_, _>>();
+        let resources = self
+            .metadata
+            .nodes
+            .iter()
+            .map(|node| {
+                let block = self
+                    .storage
+                    .read_range(node.offset..(node.offset + node.size));
+                (node.name.clone(), block)
+            })
+            .collect::<HashMap<_, _>>();
         let metadata::NodeInfo {
             name: main_asset_name,
             offset: main_asset_offset,
@@ -102,7 +117,8 @@ impl<'a> UnityFsMeta<'a> {
             main_asset_name.into(),
             main_asset_resource,
             *main_asset_offset,
-        ).unwrap();
+        )
+        .unwrap();
         UnityFs {
             guid: self.metadata.guid,
             main_asset,

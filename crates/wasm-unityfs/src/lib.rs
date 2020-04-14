@@ -1,5 +1,5 @@
+use js_sys::{Array, Error, Object, Reflect, TypeError, Uint8Array};
 use wasm_bindgen::prelude::*;
-use js_sys::{Array, Error, Object, Reflect, Uint8Array, TypeError};
 
 use image::dxt;
 use unityfs::Data;
@@ -59,23 +59,24 @@ impl UnityObject {
     #[wasm_bindgen(getter, js_name = "type")]
     pub fn type_name(&self) -> String {
         match &self.data {
-            Data::Bool(_)   => "bool".into(),
-            Data::UInt8(_)  => "UInt8".into(),
+            Data::Bool(_) => "bool".into(),
+            Data::UInt8(_) => "UInt8".into(),
             Data::UInt16(_) => "UInt16".into(),
             Data::UInt32(_) => "UInt32".into(),
             Data::UInt64(_) => "UInt64".into(),
-            Data::SInt8(_)  => "SInt8".into(),
+            Data::SInt8(_) => "SInt8".into(),
             Data::SInt16(_) => "SInt16".into(),
             Data::SInt32(_) => "SInt32".into(),
             Data::SInt64(_) => "SInt64".into(),
-            Data::Float(_)  => "float".into(),
+            Data::Float(_) => "float".into(),
             Data::Double(_) => "double".into(),
             Data::UInt8Array(_) => "ByteArray".into(),
             Data::String(_) => "string".into(),
             Data::Pair(..) => "pair".into(),
             Data::GenericArray(_) => "Array".into(),
-            Data::GenericStruct { type_name, .. } |
-            Data::GenericPrimitive { type_name, .. } => type_name.clone().into_owned(),
+            Data::GenericStruct { type_name, .. } | Data::GenericPrimitive { type_name, .. } => {
+                type_name.clone().into_owned()
+            }
         }
     }
 
@@ -103,15 +104,11 @@ struct StreamingInfo {
 impl StreamingInfo {
     fn from_data(data: &Data<'_>) -> Result<Self, JsValue> {
         let fields = match data {
-            Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => {
-                fields
-            },
+            Data::GenericStruct { type_name, fields } if type_name == "StreamingInfo" => fields,
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let path = match fields.get("path") {
-            Some(Data::String(s)) => {
-                String::from_utf8_lossy(s).into_owned()
-            },
+            Some(Data::String(s)) => String::from_utf8_lossy(s).into_owned(),
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
         let offset = match fields.get("offset") {
@@ -122,11 +119,7 @@ impl StreamingInfo {
             Some(Data::UInt32(v)) => *v,
             _ => return Err(TypeError::new("StreamingInfo type mismatch").into()),
         };
-        Ok(Self {
-            path,
-            offset,
-            size,
-        })
+        Ok(Self { path, offset, size })
     }
 }
 
@@ -159,7 +152,13 @@ impl Texture2D {
                 let x = block_x * 4;
                 let block = etcdec::decode_single_block(&mut image_data, format)
                     .map_err(|_| Error::new("read error"))?;
-                for (block_raw, target) in block.iter().zip(buf[(4 * x as usize)..].chunks_mut(scanline).rev().skip(y as usize).take(4)) {
+                for (block_raw, target) in block.iter().zip(
+                    buf[(4 * x as usize)..]
+                        .chunks_mut(scanline)
+                        .rev()
+                        .skip(y as usize)
+                        .take(4),
+                ) {
                     target[..16].copy_from_slice(block_raw);
                 }
             }
@@ -238,11 +237,7 @@ impl Texture2D {
         }
     }
 
-    fn unknown(
-        name: String,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    fn unknown(name: String, width: u32, height: u32) -> Self {
         Self {
             name,
             width,
@@ -310,7 +305,8 @@ impl Texture2D {
             return Ok(());
         };
         let buf = &resource[streaming_info.offset as usize..][..streaming_info.size as usize];
-        let image_data = Texture2D::read(self.width, self.height, *format, std::io::Cursor::new(buf))?;
+        let image_data =
+            Texture2D::read(self.width, self.height, *format, std::io::Cursor::new(buf))?;
         self.image_data = ImageData::Loaded(image_data);
         Ok(())
     }
@@ -329,20 +325,16 @@ fn convert_shallow(data: &Data<'_>) -> JsValue {
         Data::SInt64(v) => JsValue::from_f64(*v as f64),
         Data::Float(v) => JsValue::from_f64((*v).into()),
         Data::Double(v) => JsValue::from_f64((*v).into()),
-        Data::String(s) => {
-            std::str::from_utf8(&**s)
-                .map(JsValue::from_str)
-                .unwrap_or_else(|_| Uint8Array::from(&**s).into())
-        },
+        Data::String(s) => std::str::from_utf8(&**s)
+            .map(JsValue::from_str)
+            .unwrap_or_else(|_| Uint8Array::from(&**s).into()),
         v => UnityObject::from_data(v).into(),
     }
 }
 
 fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
     Ok(match data {
-        Data::GenericPrimitive { data, .. } => {
-            Uint8Array::from(&**data).into()
-        },
+        Data::GenericPrimitive { data, .. } => Uint8Array::from(&**data).into(),
         Data::GenericStruct { type_name, fields } => {
             if type_name == "Texture2D" {
                 let name = match fields.get("m_Name") {
@@ -367,10 +359,18 @@ fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
                 };
                 let image_data = std::io::Cursor::new(image_data);
                 let format = match fields.get("m_TextureFormat") {
-                    Some(Data::SInt32(34)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::EtcRgb4)),
-                    Some(Data::SInt32(45)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgb)),
-                    Some(Data::SInt32(46)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba1)),
-                    Some(Data::SInt32(47)) => Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba8)),
+                    Some(Data::SInt32(34)) => {
+                        Some(DecodeFormat::Etc(etcdec::DecodeFormat::EtcRgb4))
+                    }
+                    Some(Data::SInt32(45)) => {
+                        Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgb))
+                    }
+                    Some(Data::SInt32(46)) => {
+                        Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba1))
+                    }
+                    Some(Data::SInt32(47)) => {
+                        Some(DecodeFormat::Etc(etcdec::DecodeFormat::Etc2Rgba8))
+                    }
                     Some(Data::SInt32(10)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT1)),
                     Some(Data::SInt32(12)) => Some(DecodeFormat::Dxt(dxt::DXTVariant::DXT5)),
                     Some(Data::SInt32(_)) => None,
@@ -378,7 +378,8 @@ fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
                     None => return Err(Error::new("m_TextureFormat not found").into()),
                 };
                 if let Some(format) = format {
-                    let streaming_info = fields.get("m_StreamData")
+                    let streaming_info = fields
+                        .get("m_StreamData")
                         .ok_or_else(|| Error::new("m_StreamData not found").into())
                         .and_then(StreamingInfo::from_data)?;
                     if streaming_info.path.is_empty() {
@@ -390,17 +391,20 @@ fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
                     Texture2D::unknown(name, width, height).into()
                 }
             } else {
-                let fields: Array = fields.iter().map(|(k, v)| -> Result<Array, JsValue> {
-                    let v = convert_shallow(v);
-                    Ok(Array::of2(&JsValue::from_str(k), &v))
-                }).collect::<Result<_, _>>()?;
+                let fields: Array = fields
+                    .iter()
+                    .map(|(k, v)| -> Result<Array, JsValue> {
+                        let v = convert_shallow(v);
+                        Ok(Array::of2(&JsValue::from_str(k), &v))
+                    })
+                    .collect::<Result<_, _>>()?;
                 Object::from_entries(&fields)?.into()
             }
-        },
+        }
         Data::GenericArray(arr) => {
             let arr = arr.iter().map(convert_shallow).collect::<Array>();
             arr.into()
-        },
+        }
         Data::Bool(b) => JsValue::from_bool(*b),
         Data::UInt8(v) => JsValue::from_f64((*v).into()),
         Data::UInt16(v) => JsValue::from_f64((*v).into()),
@@ -416,12 +420,10 @@ fn convert_data(data: &Data<'_>) -> Result<JsValue, JsValue> {
             let fst = UnityObject::from_data(fst).into();
             let snd = UnityObject::from_data(snd).into();
             Array::of2(&fst, &snd).into()
-        },
-        Data::UInt8Array(s) => {
-            Uint8Array::from(&**s).into()
-        },
-        Data::String(s) => {
-            std::str::from_utf8(&**s).map(JsValue::from_str).unwrap_or_else(|_| Uint8Array::from(&**s).into())
-        },
+        }
+        Data::UInt8Array(s) => Uint8Array::from(&**s).into(),
+        Data::String(s) => std::str::from_utf8(&**s)
+            .map(JsValue::from_str)
+            .unwrap_or_else(|_| Uint8Array::from(&**s).into()),
     })
 }

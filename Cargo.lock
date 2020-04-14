@@ -285,7 +285,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "wasm-unityfs"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "console_error_panic_hook 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "etcdec 0.1.0",

@@ -1,21 +1,13 @@
 use crate::common_parser::read_string;
 use crate::util::align;
-use std::borrow::Cow;
-use std::collections::HashMap;
 use nom::{
-    number::{
-        complete as nom_number,
-        Endianness,
-    },
-    u16,
-    u32,
-    u64,
-    i16,
-    i32,
-    i64,
-    IResult,
+    i16, i32, i64,
+    number::{complete as nom_number, Endianness},
+    u16, u32, u64, IResult,
 };
 use serde::Serialize;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct TypeTree<'a> {
@@ -41,7 +33,8 @@ fn parse_old(endianness: Endianness) -> impl Fn(&[u8]) -> IResult<&[u8], TypeTre
         let (input, flags) = u32!(input, endianness)?;
 
         let (input, field_count) = u32!(input, endianness)?;
-        let (input, children) = nom::multi::count(parse_old(endianness), field_count as usize)(input)?;
+        let (input, children) =
+            nom::multi::count(parse_old(endianness), field_count as usize)(input)?;
         let ret = TypeTree {
             version,
             is_array,
@@ -134,7 +127,12 @@ impl<'a> TypeTree<'a> {
         self.flags & 0x4000 != 0
     }
 
-    pub fn read(&self, input: &'a [u8], endianness: Endianness, offset: u64) -> IResult<&'a [u8], Data<'a>> {
+    pub fn read(
+        &self,
+        input: &'a [u8],
+        endianness: Endianness,
+        offset: u64,
+    ) -> IResult<&'a [u8], Data<'a>> {
         let base = input;
         let mut needs_align = self.needs_align();
         let (input, data) = if self.type_name == "string" {
@@ -160,12 +158,15 @@ impl<'a> TypeTree<'a> {
                 (input, Data::UInt8Array(bytes.into()))
             } else {
                 let mut input = input;
-                let v = (0..length).map(|_| {
-                    let offset = offset + (input.as_ptr() as usize - base.as_ptr() as usize) as u64;
-                    let (left, data) = element_type.read(input, endianness, offset)?;
-                    input = left;
-                    Ok(data)
-                }).collect::<Result<Vec<_>, _>>()?;
+                let v = (0..length)
+                    .map(|_| {
+                        let offset =
+                            offset + (input.as_ptr() as usize - base.as_ptr() as usize) as u64;
+                        let (left, data) = element_type.read(input, endianness, offset)?;
+                        input = left;
+                        Ok(data)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 (input, Data::GenericArray(v))
             }
         } else if self.children.len() == 0 {
@@ -178,7 +179,7 @@ impl<'a> TypeTree<'a> {
             let (data, input) = input.split_at(length as usize);
             let data = match self.type_name.as_ref() {
                 "bool" => Data::Bool(data[0] != 0),
-                "UInt8"  => Data::UInt8(nom_number::be_u8(data)?.1),
+                "UInt8" => Data::UInt8(nom_number::be_u8(data)?.1),
                 "UInt16" => Data::UInt16(u16!(data, endianness)?.1),
                 "UInt32" | "unsigned int" => Data::UInt32(u32!(data, endianness)?.1),
                 "UInt64" => Data::UInt64(u64!(data, endianness)?.1),
@@ -188,18 +189,31 @@ impl<'a> TypeTree<'a> {
                 "SInt64" => Data::SInt64(i64!(data, endianness)?.1),
                 "float" => Data::Float(f32::from_bits(u32!(data, endianness)?.1)),
                 "double" => Data::Double(f64::from_bits(u64!(data, endianness)?.1)),
-                _ => Data::GenericPrimitive { type_name: self.type_name.clone(), data: data.into() },
+                _ => Data::GenericPrimitive {
+                    type_name: self.type_name.clone(),
+                    data: data.into(),
+                },
             };
             (input, data)
         } else {
             let mut input = input;
-            let fields = self.children.iter().map(|field_type| {
-                let offset = offset + (input.as_ptr() as usize - base.as_ptr() as usize) as u64;
-                let (left, data) = field_type.read(input, endianness, offset)?;
-                input = left;
-                Ok((field_type.name.clone(), data))
-            }).collect::<Result<HashMap<_, _>, _>>()?;
-            (input, Data::GenericStruct { type_name: self.type_name.clone(), fields })
+            let fields = self
+                .children
+                .iter()
+                .map(|field_type| {
+                    let offset = offset + (input.as_ptr() as usize - base.as_ptr() as usize) as u64;
+                    let (left, data) = field_type.read(input, endianness, offset)?;
+                    input = left;
+                    Ok((field_type.name.clone(), data))
+                })
+                .collect::<Result<HashMap<_, _>, _>>()?;
+            (
+                input,
+                Data::GenericStruct {
+                    type_name: self.type_name.clone(),
+                    fields,
+                },
+            )
         };
         let input = if needs_align {
             align(offset as usize, base, input)
@@ -241,45 +255,49 @@ pub enum Data<'b> {
 impl std::fmt::Debug for Data<'_> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Data::GenericPrimitive { type_name, data } => {
-                write!(fmt, "{}({:?})", type_name, data)
-            },
-            Data::GenericArray(data) => {
-                fmt.debug_list().entries(data).finish()
-            },
+            Data::GenericPrimitive { type_name, data } => write!(fmt, "{}({:?})", type_name, data),
+            Data::GenericArray(data) => fmt.debug_list().entries(data).finish(),
             Data::GenericStruct { type_name, fields } => {
                 let mut s = fmt.debug_struct(type_name);
                 for (k, v) in fields.iter() {
                     s.field(k, v);
                 }
                 s.finish()
-            },
-            Data::Bool(data)   => write!(fmt, "Bool({:?})", data),
-            Data::UInt8(data)  => write!(fmt, "UInt8({:?})", data),
+            }
+            Data::Bool(data) => write!(fmt, "Bool({:?})", data),
+            Data::UInt8(data) => write!(fmt, "UInt8({:?})", data),
             Data::UInt16(data) => write!(fmt, "UInt16({:?})", data),
             Data::UInt32(data) => write!(fmt, "UInt32({:?})", data),
             Data::UInt64(data) => write!(fmt, "UInt64({:?})", data),
-            Data::SInt8(data)  => write!(fmt, "SInt8({:?})", data),
+            Data::SInt8(data) => write!(fmt, "SInt8({:?})", data),
             Data::SInt16(data) => write!(fmt, "SInt16({:?})", data),
             Data::SInt32(data) => write!(fmt, "SInt32({:?})", data),
             Data::SInt64(data) => write!(fmt, "SInt64({:?})", data),
-            Data::Float(data)  => write!(fmt, "Float({:?})", data),
+            Data::Float(data) => write!(fmt, "Float({:?})", data),
             Data::Double(data) => write!(fmt, "Double({:?})", data),
             Data::String(b) => {
                 if let Ok(s) = std::str::from_utf8(b) {
                     write!(fmt, "{:?}", s)
                 } else {
                     let len = b.len();
-                    write!(fmt, "String({} byte{})", len, if len == 1 { "" } else { "s" })
+                    write!(
+                        fmt,
+                        "String({} byte{})",
+                        len,
+                        if len == 1 { "" } else { "s" }
+                    )
                 }
-            },
+            }
             Data::UInt8Array(b) => {
                 let len = b.len();
-                write!(fmt, "Uint8Array({} byte{})", len, if len == 1 { "" } else { "s" })
-            },
-            Data::Pair(fst, snd) => {
-                fmt.debug_tuple("Pair").field(fst).field(snd).finish()
-            },
+                write!(
+                    fmt,
+                    "Uint8Array({} byte{})",
+                    len,
+                    if len == 1 { "" } else { "s" }
+                )
+            }
+            Data::Pair(fst, snd) => fmt.debug_tuple("Pair").field(fst).field(snd).finish(),
         }
     }
 }
@@ -293,7 +311,10 @@ impl Data<'_> {
             Data::GenericArray(v) => Data::GenericArray(v.iter().map(Self::clone_owned).collect()),
             Data::GenericStruct { type_name, fields } => Data::GenericStruct {
                 type_name: type_name.clone().into_owned().into(),
-                fields: fields.iter().map(|(k, v)| (k.clone().into_owned().into(), v.clone_owned())).collect(),
+                fields: fields
+                    .iter()
+                    .map(|(k, v)| (k.clone().into_owned().into(), v.clone_owned()))
+                    .collect(),
             },
             Data::GenericPrimitive { type_name, data } => Data::GenericPrimitive {
                 type_name: type_name.clone().into_owned().into(),
@@ -322,7 +343,12 @@ struct TypeMetadataEntry<'a> {
 }
 
 impl<'a> TypeMetadataEntry<'a> {
-    fn parse(input: &'a [u8], endianness: Endianness, format: u32, has_type_trees: bool) -> IResult<&'a [u8], Self> {
+    fn parse(
+        input: &'a [u8],
+        endianness: Endianness,
+        format: u32,
+        has_type_trees: bool,
+    ) -> IResult<&'a [u8], Self> {
         let (input, class_id) = i32!(input, endianness)?;
         let (input, class_id) = if format >= 17 {
             let input = &input[1..];
@@ -352,21 +378,27 @@ impl<'a> TypeMetadataEntry<'a> {
         } else {
             (input, None)
         };
-        Ok((input, Self {
-            class_id,
-            hash: Some(hash),
-            tree,
-        }))
+        Ok((
+            input,
+            Self {
+                class_id,
+                hash: Some(hash),
+                tree,
+            },
+        ))
     }
 
     fn parse_old(input: &'a [u8], endianness: Endianness, format: u32) -> IResult<&'a [u8], Self> {
         let (input, class_id) = i32!(input, endianness)?;
         let (input, tree) = TypeTree::parse(input, endianness, format)?;
-        Ok((input, Self {
-            class_id,
-            hash: None,
-            tree: Some(tree),
-        }))
+        Ok((
+            input,
+            Self {
+                class_id,
+                hash: None,
+                tree: Some(tree),
+            },
+        ))
     }
 }
 
@@ -388,30 +420,41 @@ impl<'a> TypeMetadata<'a> {
             let input = &input[1..];
             let (mut input, num_types) = u32!(input, endianness)?;
 
-            let entries = (0..num_types).map(|_| {
-                let (left, entry) = TypeMetadataEntry::parse(input, endianness, format, has_type_trees)?;
-                input = left;
-                Ok(entry)
-            }).collect::<Result<Vec<_>, _>>()?;
+            let entries = (0..num_types)
+                .map(|_| {
+                    let (left, entry) =
+                        TypeMetadataEntry::parse(input, endianness, format, has_type_trees)?;
+                    input = left;
+                    Ok(entry)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             (input, entries)
         } else {
             let (mut input, fields_count) = u32!(input, endianness)?;
-            let entries = (0..fields_count).map(|_| {
-                let (left, entry) = TypeMetadataEntry::parse_old(input, endianness, format)?;
-                input = left;
-                Ok(entry)
-            }).collect::<Result<Vec<_>, _>>()?;
+            let entries = (0..fields_count)
+                .map(|_| {
+                    let (left, entry) = TypeMetadataEntry::parse_old(input, endianness, format)?;
+                    input = left;
+                    Ok(entry)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             (input, entries)
         };
         let class_ids = entries.iter().map(|entry| entry.class_id).collect();
-        let entries = entries.into_iter().map(|entry| (entry.class_id, entry)).collect();
+        let entries = entries
+            .into_iter()
+            .map(|entry| (entry.class_id, entry))
+            .collect();
 
-        Ok((input, Self {
-            generator_version,
-            target_platform,
-            class_ids,
-            entries,
-        }))
+        Ok((
+            input,
+            Self {
+                generator_version,
+                target_platform,
+                class_ids,
+                entries,
+            },
+        ))
     }
 
     pub fn class_id_from_idx(&self, idx: usize) -> i32 {

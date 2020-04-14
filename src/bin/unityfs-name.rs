@@ -8,7 +8,7 @@ fn main() {
         Err(e) => {
             eprintln!("Failed to parse: {:?}", e);
             std::process::exit(1);
-        },
+        }
     };
     let fs = meta.read_unityfs();
     let asset = fs.main_asset();
@@ -19,18 +19,18 @@ fn main() {
                     Some(unityfs::Data::String(s)) => {
                         println!("{}", String::from_utf8_lossy(s));
                         return;
-                    },
+                    }
                     Some(_) => {
                         eprintln!("m_Name type mismatch");
                         std::process::exit(1);
-                    },
+                    }
                     None => {
                         eprintln!("m_Name not found at AssetBundle");
                         std::process::exit(1);
-                    },
+                    }
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
     eprintln!("Cannot find AssetBundle object");

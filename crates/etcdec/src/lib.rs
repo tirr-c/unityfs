@@ -1,8 +1,8 @@
 const TABLE_59T: [u8; 8] = [3, 6, 11, 16, 23, 32, 41, 64];
 const TABLE_58H: [u8; 8] = [3, 6, 11, 16, 23, 32, 41, 64];
 const COMPRESS_PARAMS: [[i32; 4]; 16] = [
-    [-8, -2,  2, 8],
-    [-8, -2,  2, 8],
+    [-8, -2, 2, 8],
+    [-8, -2, 2, 8],
     [-17, -5, 5, 17],
     [-17, -5, 5, 17],
     [-29, -9, 9, 29],
@@ -20,22 +20,22 @@ const COMPRESS_PARAMS: [[i32; 4]; 16] = [
 ];
 const UNSCRAMBLE: [usize; 4] = [2, 3, 1, 0];
 const ALPHA_BASE: [[i32; 4]; 16] = [
-    [-15,  -9, -6, -3],
+    [-15, -9, -6, -3],
     [-13, -10, -7, -3],
-    [-13,  -8, -5, -2],
-    [-13,  -6, -4, -2],
-    [-12,  -8, -6, -3],
-    [-11,  -9, -7, -3],
-    [-11,  -8, -7, -4],
-    [-11,  -8, -5, -3],
-    [-10,  -8, -6, -2],
-    [-10,  -8, -5, -2],
-    [-10,  -8, -4, -2],
-    [-10,  -7, -5, -2],
-    [-10,  -7, -4, -3],
-    [-10,  -3, -2, -1],
-    [ -9,  -8, -6, -4],
-    [ -9,  -7, -5, -3]
+    [-13, -8, -5, -2],
+    [-13, -6, -4, -2],
+    [-12, -8, -6, -3],
+    [-11, -9, -7, -3],
+    [-11, -8, -7, -4],
+    [-11, -8, -5, -3],
+    [-10, -8, -6, -2],
+    [-10, -8, -5, -2],
+    [-10, -8, -4, -2],
+    [-10, -7, -5, -2],
+    [-10, -7, -4, -3],
+    [-10, -3, -2, -1],
+    [-9, -8, -6, -4],
+    [-9, -7, -5, -3],
 ];
 lazy_static::lazy_static! {
     static ref ALPHA_TABLE: [[i32; 8]; 256] = {
@@ -87,14 +87,12 @@ enum Pattern {
 }
 
 macro_rules! extract_and_shift {
-    ($v:ident >> $w:expr) => {
-        {
-            let mask = (1 << $w) - 1;
-            let ret = $v & mask;
-            $v >>= $w;
-            ret
-        }
-    };
+    ($v:ident >> $w:expr) => {{
+        let mask = (1 << $w) - 1;
+        let ret = $v & mask;
+        $v >>= $w;
+        ret
+    }};
 }
 
 fn unstuff_57(mut from: u64) -> u64 {
@@ -143,8 +141,16 @@ fn decompress_color(rb: usize, gb: usize, bb: usize, rgb444: [[u8; 3]; 2]) -> [[
     }
 
     [
-        [calc(rgb444[0][0], rb), calc(rgb444[0][1], gb), calc(rgb444[0][2], bb)],
-        [calc(rgb444[1][0], rb), calc(rgb444[1][1], gb), calc(rgb444[1][2], bb)],
+        [
+            calc(rgb444[0][0], rb),
+            calc(rgb444[0][1], gb),
+            calc(rgb444[0][2], bb),
+        ],
+        [
+            calc(rgb444[1][0], rb),
+            calc(rgb444[1][1], gb),
+            calc(rgb444[1][2], bb),
+        ],
     ]
 }
 
@@ -174,7 +180,7 @@ fn calculate_paint_colors(dist: u8, pat: Pattern, colors: [[u8; 3]; 2]) -> [[u8;
                     colors[1][2].saturating_sub(v),
                 ],
             ]
-        },
+        }
         Pattern::T => {
             let v = TABLE_59T[usize::from(dist)];
             [
@@ -191,7 +197,7 @@ fn calculate_paint_colors(dist: u8, pat: Pattern, colors: [[u8; 3]; 2]) -> [[u8;
                     colors[1][2].saturating_sub(v),
                 ],
             ]
-        },
+        }
     }
 }
 
@@ -209,10 +215,8 @@ fn decompress_block_thumb(block: u64, pattern: Pattern, alpha: bool) -> Block {
             let col1 = (color_data >> 2) & 0x0fff;
             let extra_bit = if col0 >= col1 { 1 } else { 0 };
             extract_and_shift!(color_data >> 2) as u8 | extra_bit
-        },
-        Pattern::T => {
-            extract_and_shift!(color_data >> 3) as u8
-        },
+        }
+        Pattern::T => extract_and_shift!(color_data >> 3) as u8,
     };
     let rgb444 = {
         let mut ret = [[0u8; 3]; 2];
@@ -234,7 +238,8 @@ fn decompress_block_thumb(block: u64, pattern: Pattern, alpha: bool) -> Block {
             let start_offset = CHANNELS * x;
             let slice = &mut ret[y][start_offset..start_offset + 4];
 
-            let idx = (extract_and_shift!(idx_upper >> 1) << 1) | extract_and_shift!(idx_lower >> 1);
+            let idx =
+                (extract_and_shift!(idx_upper >> 1) << 1) | extract_and_shift!(idx_lower >> 1);
             let color = &paint_colors[idx];
             slice[0..3].copy_from_slice(color);
             slice[3] = if alpha && idx == 2 { 0 } else { 255 };
@@ -270,7 +275,13 @@ fn decompress_block_planar(mut block: u64) -> Block {
                 let v = v[c] as isize;
                 let o = o[c] as isize;
                 let val = (xx * (h - o) + yy * (v - o) + 4 * o + 2) >> 2;
-                let val = if val < 0 { 0 } else if val > 0xff { 0xff } else { val as u8 };
+                let val = if val < 0 {
+                    0
+                } else if val > 0xff {
+                    0xff
+                } else {
+                    val as u8
+                };
                 ret[y][CHANNELS * x + c] = val;
             }
             ret[y][CHANNELS * x + 3] = 0xff;
@@ -280,13 +291,14 @@ fn decompress_block_planar(mut block: u64) -> Block {
 }
 
 fn decompress_block_diff_flip(mut block: u64, alpha: bool) -> Block {
-    fn fill(colors_table: [([u8; 3], usize); 2], idx: u32, flip: bool, has_transparent: bool) -> Block {
+    fn fill(
+        colors_table: [([u8; 3], usize); 2],
+        idx: u32,
+        flip: bool,
+        has_transparent: bool,
+    ) -> Block {
         let mut map = [[&colors_table[0]; BLOCK_WIDTH]; BLOCK_HEIGHT];
-        let (range_x, range_y) = if flip {
-            (0..4, 2..4)
-        } else {
-            (2..4, 0..4)
-        };
+        let (range_x, range_y) = if flip { (0..4, 2..4) } else { (2..4, 0..4) };
         for x in range_x {
             for y in range_y.clone() {
                 map[y][x] = &colors_table[1];
@@ -410,7 +422,10 @@ pub enum DecodeFormat {
     Etc2Rgba1,
 }
 
-pub fn decode_single_block<R: std::io::Read>(input: &mut R, format: DecodeFormat) -> std::io::Result<Block> {
+pub fn decode_single_block<R: std::io::Read>(
+    input: &mut R,
+    format: DecodeFormat,
+) -> std::io::Result<Block> {
     let mut buf = [0u8; 8];
     let alpha_block = if format == DecodeFormat::Etc2Rgba8 {
         input.read_exact(&mut buf)?;

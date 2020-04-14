@@ -112,7 +112,9 @@ impl<'a> Iterator for Sequences<'a> {
 
 pub fn decode_block(input: &[u8]) -> Result<Vec<u8>, Lz4Error> {
     let seq = Sequences::new(input);
-    let uncompressed_len = seq.map(|seq| seq.map(|seq| seq.len())).sum::<Result<usize, _>>()?;
+    let uncompressed_len = seq
+        .map(|seq| seq.map(|seq| seq.len()))
+        .sum::<Result<usize, _>>()?;
     let mut out = vec![0u8; uncompressed_len];
     let mut p = 0;
 

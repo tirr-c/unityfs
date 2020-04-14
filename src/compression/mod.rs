@@ -26,9 +26,7 @@ impl CompressionType {
         use CompressionType::*;
 
         match self {
-            Lz4 | Lz4Hc => {
-                lz4::decode_block(data).unwrap()
-            },
+            Lz4 | Lz4Hc => lz4::decode_block(data).unwrap(),
             _ => unimplemented!(),
         }
     }
@@ -77,20 +75,20 @@ pub struct CompressedBlockStorage<'a> {
 impl<'a> CompressedBlockStorage<'a> {
     pub fn from_blocks(blocks: Vec<CompressedBlock<'a>>) -> Self {
         let mut total_len = 0u64;
-        let blocks = blocks.into_iter().map(|b| {
-            let start_offset = total_len;
-            total_len += <_ as Into<u64>>::into(b.uncompressed_size());
-            BlockEntry {
-                offset: start_offset,
-                uncompressed: Cell::new(false),
-                data: b,
-            }
-        }).collect();
+        let blocks = blocks
+            .into_iter()
+            .map(|b| {
+                let start_offset = total_len;
+                total_len += <_ as Into<u64>>::into(b.uncompressed_size());
+                BlockEntry {
+                    offset: start_offset,
+                    uncompressed: Cell::new(false),
+                    data: b,
+                }
+            })
+            .collect();
         let buf = UnsafeCell::new(vec![0; total_len as usize].into());
-        Self {
-            blocks,
-            buf,
-        }
+        Self { blocks, buf }
     }
 }
 
@@ -104,8 +102,15 @@ impl CompressedBlockStorage<'_> {
 
     pub fn read_range(&self, range: std::ops::Range<u64>) -> &[u8] {
         let std::ops::Range { start, end } = range;
-        let start_block_idx = self.blocks.binary_search_by_key(&start, |b| b.offset).unwrap_or_else(|idx| idx - 1);
-        let end_block_idx = self.blocks.binary_search_by_key(&end, |b| b.offset).unwrap_or_else(|idx| idx) - 1;
+        let start_block_idx = self
+            .blocks
+            .binary_search_by_key(&start, |b| b.offset)
+            .unwrap_or_else(|idx| idx - 1);
+        let end_block_idx = self
+            .blocks
+            .binary_search_by_key(&end, |b| b.offset)
+            .unwrap_or_else(|idx| idx)
+            - 1;
         for entry in &self.blocks[start_block_idx..=end_block_idx] {
             if entry.uncompressed.replace(true) {
                 continue;
